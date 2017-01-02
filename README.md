@@ -2,6 +2,7 @@ perq
 =====
 
 Persistent, named queues for Erlang.
+Right now, the file storing a queue keeps growing until 2GB, and then it stops working. The plan is to fix this of course.
 
 ## Add queue
 ```
