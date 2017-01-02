@@ -29,6 +29,7 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+-spec add_queue(atom()) -> ok | {error, any()}.
 add_queue(Name) ->
     Child = {Name, {perq_worker, start_link, [Name]}, permanent, 5000, worker, [perq_worker]},
     case supervisor:start_child(?MODULE, Child) of
@@ -38,12 +39,14 @@ add_queue(Name) ->
             ChildPid;
         Error ->
             lager:error("Failed to persistent queue ~p with reason ~p", [Name, Error]),
-            error
+            {error, Error}
     end.
 
+-spec enq(atom(), binary()) -> ok.
 enq(Name, Binary) ->
     find_child_and_call(Name, {enq, Binary}).
 
+-spec deq(atom()) -> binary() | empty.
 deq(Name) ->
     find_child_and_call(Name, {deq}).
 
