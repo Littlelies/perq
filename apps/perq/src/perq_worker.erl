@@ -17,10 +17,16 @@
 -define(QUEUE_FILENAME, "./perq_data/queue_").
 -define(INDEX_BITSIZE, 24).
 -define(INDEX_SIZE, 3). %% BITSIZE/8
+
+-ifdef(TEST).
+-define(MAX_FILE_SIZE, 11).
+-else.
 -define(MAX_FILE_SIZE, 16777216). %% 2 ^ BITSIZE
+-endif.
 
 -record(state, {
     name :: atom(),
+    root_filemane :: list(),
     write_filename :: list(),
     write_fd :: file:fd(),
     write_position,
@@ -103,12 +109,13 @@ code_change(_OldVsn, State, _Extra) ->
 
 init_state(Name) ->
     FileName = ?QUEUE_FILENAME ++ atom_to_list(Name),
+    RootFileName = FileName ++ "__0000",
 
-    FileNames = lists:sort(filelib:wildcard(FileName ++ ".*")),
+    FileNames = lists:sort(filelib:wildcard(FileName ++ "__*")),
     case FileNames of
         [] ->
-            ReadFileName = FileName ++ ".0000",
-            WriteFileName = ReadFileName;
+            ReadFileName = RootFileName,
+            WriteFileName = RootFileName;
         _ ->
             ReadFileName = hd(FileNames),
             WriteFileName = lists:last(FileNames)
@@ -122,10 +129,11 @@ init_state(Name) ->
         ReadFileName =:= WriteFileName ->
             WriteFd = ReadFd;
         true ->
-            {ok, WriteFd} = file:open(FileName, [read, write, binary, raw])
+            {ok, WriteFd} = file:open(WriteFileName, [read, write, binary, raw])
     end,
     #state{
         name = Name,
+        root_filemane = RootFileName,
         write_filename = WriteFileName, write_fd = WriteFd, write_position = WritePosition,
         read_filename = ReadFileName, read_fd = ReadFd, read_position = ReadPosition
     }.
@@ -147,29 +155,41 @@ open(FileName) ->
     end.
 
 increment_filename(FileName) ->
-    [Root, OccurenceAsList] = re:split(FileName, "\\.", [{return, list}]),
+    [Root, OccurenceAsList] = re:split(FileName, "__", [{return, list}]),
     Occurence = list_to_integer(OccurenceAsList) + 1,
-    Root ++ "." ++ lists:flatten(io_lib:format("~4..0w", [Occurence])).
+    Root ++ "__" ++ lists:flatten(io_lib:format("~4..0w", [Occurence])).
 
 dequeue(State, JustLook) ->
     ReadFileName = State#state.read_filename,
     ReadPosition = State#state.read_position,
+    RootFileName = State#state.root_filemane,
     %% Read from file
     case file:pread(State#state.read_fd, ReadPosition, 64000) of
         eof ->
-            %% Nothing more to be read, let delete that file
-            file:close(State#state.read_fd),
-            file:delete(State#state.read_filename),
-            case State#state.write_filename of
-                ReadFileName ->
-                    %% Writer is at same position: queue is empty! Let reset files
-                    NewState = init_state(State#state.name),
-                    {reply, empty, NewState};
+            case {State#state.read_filename, ReadPosition} of
+                {RootFileName, ?INDEX_SIZE} ->
+                    %% Nothing in queue, nothing to be flushed
+                    {reply, empty, State};
                 _ ->
-                    %% Writer is on another file, open the next one and try again to dequeue
-                    NewFileName = increment_filename(State#state.read_filename),
-                    {ok, Fd, ?INDEX_SIZE} = open(NewFileName),
-                    dequeue(State#state{read_filename = NewFileName, read_fd = Fd, read_position = ?INDEX_SIZE}, JustLook)
+                    %% Nothing more to be read, let delete that file
+                    file:close(State#state.read_fd),
+                    file:delete(State#state.read_filename),
+                    case State#state.write_filename of
+                        ReadFileName ->
+                            %% Writer is at same position: queue is empty! Let reset all files
+                            NewState = init_state(State#state.name),
+                            {reply, empty, NewState};
+                        _ ->
+                            %% Writer is on another file, open the next one and try again to dequeue
+                            NewFileName = increment_filename(State#state.read_filename),
+                            case State#state.write_filename of
+                                NewFileName ->
+                                    Fd = State#state.write_fd;
+                                _ ->
+                                    {ok, Fd, ?INDEX_SIZE} = open(NewFileName)
+                            end,
+                            dequeue(State#state{read_filename = NewFileName, read_fd = Fd, read_position = ?INDEX_SIZE}, JustLook)
+                    end
             end;
         {ok, <<Size:?INDEX_BITSIZE, Binary/binary>>} ->
             case JustLook of
