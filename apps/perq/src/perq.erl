@@ -34,19 +34,17 @@ add_queue(Name) ->
     Child = {Name, {perq_worker, start_link, [Name]}, permanent, 5000, worker, [perq_worker]},
     case supervisor:start_child(?MODULE, Child) of
         {ok, ChildPid} ->
-            lager:info("Started persistent queue ~p at ~p", [Name, ChildPid]),
             append_term(?ROOT_CONFIG_FILE, Child),
             ChildPid;
         Error ->
-            lager:error("Failed to persistent queue ~p with reason ~p", [Name, Error]),
             {error, Error}
     end.
 
--spec enq(atom(), binary()) -> ok.
+-spec enq(atom(), binary()) -> ok | {error, unknown | restarting | any()}.
 enq(Name, Binary) ->
     find_child_and_call(Name, {enq, Binary}).
 
--spec deq(atom()) -> binary() | empty.
+-spec deq(atom()) -> binary() | empty | {error, unknown | restarting | any()}.
 deq(Name) ->
     find_child_and_call(Name, {deq}).
 
@@ -88,7 +86,6 @@ find_child_and_call(Name, CallMessage) ->
         false ->
             {error, unknown};
         {_Id, restarting, _Type, _Modules} ->
-            lager:error("Attempt to send to a restarting child ~p", [Name]),
             {error, restarting};
         {_Id, ChildPid, _Type, _Modules} ->
             gen_server:call(ChildPid, CallMessage)
