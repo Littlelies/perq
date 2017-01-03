@@ -104,6 +104,9 @@ find_child_and_call(Name, CallMessage) ->
 -ifdef(TEST).
 perq_test() ->
     file:delete("./perq_data/queue_test.0000"),
+    file:delete("./perq_data/queue_test.0001"),
+    file:delete("./perq_data/queue_test.0002"),
+    file:delete("./perq_data/queue_test.0003"),
     file:delete("./perq_data/config_test"),
     application:start(perq),
     add_queue(test),
@@ -121,12 +124,17 @@ perq_test() ->
     enq(test, <<"tot3">>),
     enq(test, <<"tot4">>),
     enq(test, <<"tot5">>),
+    application:stop(perq),
+    application:start(perq),
     ?assert(deq(test) =:= <<"tot0">>),
     ?assert(deq(test) =:= <<"tot1">>),
     ?assert(deq(test) =:= <<"tot2">>),
     ?assert(deq(test) =:= <<"tot3">>),
+    enq(test, <<"tot6">>),
     ?assert(deq(test) =:= <<"tot4">>),
     ?assert(deq(test) =:= <<"tot5">>),
+    ?assert(deq(test) =:= <<"tot6">>),
+    ?assert(deq(test) =:= empty),
     application:stop(perq).
 
 perq_restart_test() ->
