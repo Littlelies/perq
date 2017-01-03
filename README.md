@@ -2,7 +2,6 @@ perq
 =====
 
 Persistent, named queues for Erlang.
-Right now, the file storing a queue keeps growing until 2GB, and then it stops working. The plan is to fix this of course.
 
 ## Add queue
 ```
@@ -10,13 +9,17 @@ Right now, the file storing a queue keeps growing until 2GB, and then it stops w
 ```
 ## Add a binary to a queue
 ```
--spec perq:enq(atom(), binary()) -> ok.
+-spec enq(atom(), binary()) -> ok | {error, unknown | restarting | any()}.
 ```
 ## Get oldest item from the queue
 ```
--spec perq:deq(atom()) -> binary() | empty.
+-spec deq(atom()) -> binary() | empty | {error, unknown | restarting | any()}.
 ```
+## Get oldest item from the queue BUT don't remove it (convenient to make sure we only remove items from queue when a job is done for example)
+```
+-spec predeq(atom()) -> binary() | empty | {error, unknown | restarting | any()}.
 
+```
 Build
 -----
 

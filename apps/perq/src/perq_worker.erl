@@ -74,8 +74,8 @@ handle_call({enq, Binary}, _From, State) ->
         true ->
             {reply, ok, State#state{write_position = NewWritePosition}}
     end;
-handle_call({deq}, _From, State) ->
-    dequeue(State);
+handle_call({deq, JustLook}, _From, State) ->
+    dequeue(State, JustLook);
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
@@ -118,10 +118,10 @@ init_state(Name) ->
 
     {ok, FileInfo} = file:read_file_info(WriteFileName),
     WritePosition = FileInfo#file_info.size,
-    case WriteFileName of
-        ReadFileName ->
+    if
+        ReadFileName =:= WriteFileName ->
             WriteFd = ReadFd;
-        _ ->
+        true ->
             {ok, WriteFd} = file:open(FileName, [read, write, binary, raw])
     end,
     #state{
@@ -151,7 +151,7 @@ increment_filename(FileName) ->
     Occurence = list_to_integer(OccurenceAsList) + 1,
     Root ++ "." ++ lists:flatten(io_lib:format("~4..0w", [Occurence])).
 
-dequeue(State) ->
+dequeue(State, JustLook) ->
     ReadFileName = State#state.read_filename,
     ReadPosition = State#state.read_position,
     %% Read from file
@@ -169,11 +169,16 @@ dequeue(State) ->
                     %% Writer is on another file, open the next one and try again to dequeue
                     NewFileName = increment_filename(State#state.read_filename),
                     {ok, Fd, ?INDEX_SIZE} = open(NewFileName),
-                    dequeue(State#state{read_filename = NewFileName, read_fd = Fd, read_position = ?INDEX_SIZE})
+                    dequeue(State#state{read_filename = NewFileName, read_fd = Fd, read_position = ?INDEX_SIZE}, JustLook)
             end;
         {ok, <<Size:?INDEX_BITSIZE, Binary/binary>>} ->
-            NewReadPosition = ReadPosition + ?INDEX_SIZE + Size,
-            file:pwrite(State#state.read_fd, 0, <<NewReadPosition:?INDEX_BITSIZE>>),
+            case JustLook of
+                true ->
+                    NewReadPosition = ReadPosition;
+                false ->
+                    NewReadPosition = ReadPosition + ?INDEX_SIZE + Size,
+                    file:pwrite(State#state.read_fd, 0, <<NewReadPosition:?INDEX_BITSIZE>>)
+            end,
             %% @todo: keep extra bytes for next reads, it will help reduce the number of OS calls
             {reply, binary:part(Binary, {0, Size}), State#state{read_position = NewReadPosition}}
     end.

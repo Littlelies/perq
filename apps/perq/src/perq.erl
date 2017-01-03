@@ -14,7 +14,8 @@
     start_link/0,
     add_queue/1,
     enq/2,
-    deq/1
+    deq/1,
+    predeq/1
     ]).
 
 %% Supervisor callbacks
@@ -46,7 +47,12 @@ enq(Name, Binary) ->
 
 -spec deq(atom()) -> binary() | empty | {error, unknown | restarting | any()}.
 deq(Name) ->
-    find_child_and_call(Name, {deq}).
+    find_child_and_call(Name, {deq, false}).
+
+-spec predeq(atom()) -> binary() | empty | {error, unknown | restarting | any()}.
+predeq(Name) ->
+    find_child_and_call(Name, {deq, true}).
+
 
 %%====================================================================
 %% Supervisor callbacks
