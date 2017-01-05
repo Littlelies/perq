@@ -14,7 +14,8 @@
     add_queue/1,
     enq/2,
     deq/1,
-    predeq/1
+    predeq/1,
+    move/2
     ]).
 
 %% Supervisor callbacks
@@ -48,14 +49,17 @@ add_queue(Name) ->
 enq(Name, Binary) ->
     find_child_and_call(Name, {enq, Binary}).
 
--spec deq(atom()) -> binary() | empty | {error, unknown | restarting | any()}.
+-spec deq(atom()) -> binary() | {cut, integer(), binary()} | empty | {error, unknown | restarting | any()}.
 deq(Name) ->
     find_child_and_call(Name, {deq, false}).
 
--spec predeq(atom()) -> binary() | empty | {error, unknown | restarting | any()}.
+-spec predeq(atom()) -> binary() | {cut, integer(), binary()} | empty | {error, unknown | restarting | any()}.
 predeq(Name) ->
     find_child_and_call(Name, {deq, true}).
 
+-spec move(atom(), atom()) -> binary() | {cut, integer(), binary()} | empty | {error, unknown | restarting | any()}.
+move(Name1, Name2) ->
+    find_child_and_call(Name1, {move, Name2}).
 
 %%====================================================================
 %% Supervisor callbacks
@@ -90,7 +94,7 @@ read_terms(FileName) ->
     end.
 
 find_child_and_call(Name, CallMessage) ->
-    Children = supervisor:which_children(?MODULE),
+    Children = supervisor:which_children(?MODULE), %% simple call to supervisor state, plus a lists:map.
     case lists:keyfind(Name, 1, Children) of
         false ->
             {error, unknown};
@@ -102,20 +106,20 @@ find_child_and_call(Name, CallMessage) ->
 
 -ifdef(TEST).
 perq_test() ->
-    file:delete("./perq_data/queue_test.0000"),
-    file:delete("./perq_data/queue_test.0001"),
-    file:delete("./perq_data/queue_test.0002"),
-    file:delete("./perq_data/queue_test.0003"),
+    file:delete("./perq_data/queue_test__0000"),
+    file:delete("./perq_data/queue_test__0001"),
+    file:delete("./perq_data/queue_test__0002"),
+    file:delete("./perq_data/queue_test__0003"),
     file:delete("./perq_data/config_test"),
     application:start(perq),
     add_queue(test),
     enq(test, <<"toto">>),
     enq(test, <<"toti">>),
-    ?assert(deq(test) =:= <<"toto">>),
-    ?assert(predeq(test) =:= <<"toti">>),
-    ?assert(deq(test) =:= <<"toti">>),
-    ?assert(deq(test) =:= empty),
-    ?assert(deq(test) =:= empty),
+    ?assertEqual(deq(test), <<"toto">>),
+    ?assertEqual(predeq(test), <<"toti">>),
+    ?assertEqual(deq(test), <<"toti">>),
+    ?assertEqual(deq(test), empty),
+    ?assertEqual(deq(test), empty),
 
     enq(test, <<"tot0">>),
     enq(test, <<"tot1">>),
@@ -125,20 +129,39 @@ perq_test() ->
     enq(test, <<"tot5">>),
     application:stop(perq),
     application:start(perq),
-    ?assert(deq(test) =:= <<"tot0">>),
-    ?assert(deq(test) =:= <<"tot1">>),
-    ?assert(deq(test) =:= <<"tot2">>),
-    ?assert(deq(test) =:= <<"tot3">>),
+    ?assertEqual(deq(test), <<"tot0">>),
+    ?assertEqual(deq(test), <<"tot1">>),
+    ?assertEqual(deq(test), <<"tot2">>),
+    ?assertEqual(deq(test), <<"tot3">>),
     enq(test, <<"tot6">>),
-    ?assert(deq(test) =:= <<"tot4">>),
-    ?assert(deq(test) =:= <<"tot5">>),
-    ?assert(deq(test) =:= <<"tot6">>),
-    ?assert(deq(test) =:= empty),
+    ?assertEqual(deq(test), <<"tot4">>),
+    ?assertEqual(deq(test), <<"tot5">>),
+    ?assertEqual(deq(test), <<"tot6">>),
+    ?assertEqual(deq(test), empty),
     application:stop(perq).
 
 perq_restart_test() ->
     application:start(perq),
     add_queue(test), %% Unique queue test
+    application:stop(perq).
+
+perq_move_test() ->
+    file:delete("./perq_data/queue_test__0000"),
+    file:delete("./perq_data/queue_test2__0000"),
+    application:start(perq),
+    add_queue(test),
+    add_queue(test2),
+    enq(test, <<"move">>),
+    enq(test, <<"move2">>),
+    enq(test, <<"move3">>),
+    ?assertEqual(move(test, test2), <<"move">>),
+    ?assertEqual(deq(test2), <<"move">>),
+    ?assertEqual(deq(test2), empty),
+    ?assertEqual(move(test, test), <<"move2">>),
+    ?assertEqual(deq(test), <<"move3">>),
+    ?assertEqual(deq(test), <<"move2">>),
+    ?assertEqual(deq(test), empty),
+    ?assertEqual(move(test, test), empty),
     application:stop(perq).
 
 -endif.

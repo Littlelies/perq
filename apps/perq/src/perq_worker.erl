@@ -56,32 +56,28 @@ init([Name]) ->
     {ok, State}.
 
 handle_call({enq, Binary}, _From, State) ->
-    %% Write into file
-    WritePosition = State#state.write_position,
-    ToWrite = <<(size(Binary)):?INDEX_BITSIZE, Binary/binary>>,
-    file:pwrite(State#state.write_fd, WritePosition, ToWrite),
-
-    %% Update write position
-    NewWritePosition = WritePosition + size(ToWrite),
-    if
-        NewWritePosition > ?MAX_FILE_SIZE ->
-            %% Maybe close current file
-            WriteFd = State#state.write_fd,
-            case State#state.read_fd of
-                WriteFd ->
-                    dont_close;
-                _ ->
-                    file:close(WriteFd)
-            end,
-            %% Create a new file
-            NewFileName = increment_filename(State#state.write_filename),
-            {ok, Fd, _Read} = open(NewFileName),
-            {reply, ok, State#state{write_filename = NewFileName, write_fd = Fd, write_position = ?INDEX_SIZE}};
-        true ->
-            {reply, ok, State#state{write_position = NewWritePosition}}
-    end;
+    enqueue(Binary, State);
 handle_call({deq, JustLook}, _From, State) ->
     dequeue(State, JustLook);
+handle_call({move, NewQueue}, _From, State) ->
+    {reply, Answer, NewState} = dequeue(State, true),
+    case Answer of
+        empty ->
+            {reply, empty, NewState};
+        _ ->
+            case State#state.name of
+                NewQueue ->
+                    {reply, ok, NewState2} = enqueue(Answer, State),
+                    dequeue(NewState2, false);
+                _ ->
+                    case perq:enq(NewQueue, Answer) of
+                        ok ->
+                            dequeue(NewState, false);
+                        Any ->
+                            {reply, Any, NewState}
+                    end
+            end
+    end;
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
@@ -116,20 +112,26 @@ init_state(Name) ->
         [] ->
             ReadFileName = RootFileName,
             WriteFileName = RootFileName;
+        [OneFileName] ->
+            ReadFileName = OneFileName,
+            WriteFileName = increment_filename(OneFileName); %% To avoid inconsistent queues, we use a new file for writing new items
         _ ->
-            ReadFileName = hd(FileNames),
-            WriteFileName = lists:last(FileNames)
+            {ReadFileName, WriteFileName0} = find_right_boundaries(FileNames),
+            WriteFileName = increment_filename(WriteFileName0) %% To avoid inconsistent queues, we use a new file for writing new items
     end,
+
+    io:format("FileNames are ~p\n", [{ReadFileName, WriteFileName}]),
 
     {ok, ReadFd, ReadPosition} = open(ReadFileName),
 
-    {ok, FileInfo} = file:read_file_info(WriteFileName),
-    WritePosition = FileInfo#file_info.size,
+    WritePosition = ?INDEX_SIZE,
     if
         ReadFileName =:= WriteFileName ->
+            {ok, FileInfo} = file:read_file_info(WriteFileName),
+            WritePosition = FileInfo#file_info.size,            
             WriteFd = ReadFd;
         true ->
-            {ok, WriteFd} = file:open(WriteFileName, [read, write, binary, raw])
+            {ok, WriteFd, WritePosition} = open(WriteFileName)
     end,
     #state{
         name = Name,
@@ -145,7 +147,7 @@ open(FileName) ->
                 eof ->
                     %% Empty file, create it with right metadata
                     Read = ?INDEX_SIZE,
-                    file:pwrite(Fd, 0, <<Read:?INDEX_BITSIZE>>);
+                    ok = file:pwrite(Fd, 0, <<Read:?INDEX_BITSIZE>>);
                 {ok, <<Read:?INDEX_BITSIZE>>} ->
                     ok
             end,
@@ -156,7 +158,7 @@ open(FileName) ->
 
 increment_filename(FileName) ->
     [Root, OccurenceAsList] = re:split(FileName, "__", [{return, list}]),
-    Occurence = list_to_integer(OccurenceAsList) + 1,
+    Occurence = (list_to_integer(OccurenceAsList) + 1) rem 10000,
     Root ++ "__" ++ lists:flatten(io_lib:format("~4..0w", [Occurence])).
 
 dequeue(State, JustLook) ->
@@ -197,8 +199,60 @@ dequeue(State, JustLook) ->
                     NewReadPosition = ReadPosition;
                 false ->
                     NewReadPosition = ReadPosition + ?INDEX_SIZE + Size,
-                    file:pwrite(State#state.read_fd, 0, <<NewReadPosition:?INDEX_BITSIZE>>)
+                    ok = file:pwrite(State#state.read_fd, 0, <<NewReadPosition:?INDEX_BITSIZE>>)
             end,
             %% @todo: keep extra bytes for next reads, it will help reduce the number of OS calls
-            {reply, binary:part(Binary, {0, Size}), State#state{read_position = NewReadPosition}}
+            ReadSize = size(Binary),
+            if
+                ReadSize < Size ->
+                    {reply, {cut, Size, binary:part(Binary, {0, ReadSize})}, State#state{read_position = NewReadPosition}};
+                true ->
+                    {reply, binary:part(Binary, {0, Size}), State#state{read_position = NewReadPosition}}
+            end
     end.
+
+enqueue(Binary, State) ->
+    %% Write into file
+    WritePosition = State#state.write_position,
+    ToWrite = <<(size(Binary)):?INDEX_BITSIZE, Binary/binary>>,
+    ok = file:pwrite(State#state.write_fd, WritePosition, ToWrite),
+
+    %% Update write position
+    NewWritePosition = WritePosition + size(ToWrite),
+    if
+        NewWritePosition > ?MAX_FILE_SIZE ->
+            %% Maybe close current file
+            WriteFd = State#state.write_fd,
+            case State#state.read_fd of
+                WriteFd ->
+                    dont_close;
+                _ ->
+                    file:close(WriteFd)
+            end,
+            %% Create a new file
+            NewFileName = increment_filename(State#state.write_filename),
+            {ok, Fd, _Read} = open(NewFileName),
+            {reply, ok, State#state{write_filename = NewFileName, write_fd = Fd, write_position = ?INDEX_SIZE}};
+        true ->
+            {reply, ok, State#state{write_position = NewWritePosition}}
+    end.
+
+find_right_boundaries([A | Next]) ->
+    find_right_boundaries(Next, A, A).
+
+find_right_boundaries([], Prev, First) ->
+    {First, Prev};
+find_right_boundaries([A | Next], Prev, First) ->
+    case increment_filename(Prev) of
+        A ->
+            find_right_boundaries(Next, A, First);
+        _ ->
+            {A, Prev}
+    end.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+find_right_boundaries_test() ->
+    ?assertEqual(find_right_boundaries(["a__0100","a__0101","a__0102"]), {"a__0100", "a__0102"}),    
+    ?assertEqual(find_right_boundaries(["a__0000","a__0001","a__9999"]), {"a__9999", "a__0001"}).
+-endif.
