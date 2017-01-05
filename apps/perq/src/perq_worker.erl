@@ -1,3 +1,8 @@
+%%%-------------------------------------------------------------------
+%% @doc perq_worker is the gen_server per queue
+%% @end
+%%%-------------------------------------------------------------------
+
 -module(perq_worker).
 
 -include_lib("kernel/include/file.hrl").
